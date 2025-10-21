@@ -46,6 +46,7 @@ class GenerateAudioRequest(BaseModel):
     reference_text: str  # Original subtitle text from reference audio
     output_path: str
     stream: bool = False
+    language_id: str = "en"  # Target language (2-letter ISO code)
 
 def initialize_model():
     """Initialize CosyVoice2 model on startup"""
@@ -97,11 +98,23 @@ async def generate_audio(request: GenerateAudioRequest):
     This endpoint uses inference_cross_lingual for cross-language dubbing
     (e.g., Japanese audio -> English speech while preserving voice characteristics)
     """
+    # Language tag mapping for CosyVoice
+    # CosyVoice1 uses tags like <|zh|>, <|en|>, <|jp|>, <|ko|>, <|yue|>
+    # CosyVoice2 may auto-detect, but tags help ensure correct language
+    LANGUAGE_TAG_MAP = {
+        "zh": "<|zh|>",
+        "en": "<|en|>",
+        "ja": "<|jp|>",  # Note: CosyVoice uses "jp" internally, not "ja"
+        "ko": "<|ko|>",
+        "yue": "<|yue|>"
+    }
+    
     try:
         logger.info("Received generate-audio request")
         logger.info(f"Text length: {len(request.text)} chars")
         logger.info(f"Reference audio: {request.reference_audio_path}")
         logger.info(f"Reference text: {request.reference_text[:100]}...")
+        logger.info(f"Target language: {request.language_id}")
         
         # Validate inputs
         if not os.path.exists(request.reference_audio_path):
@@ -119,17 +132,23 @@ async def generate_audio(request: GenerateAudioRequest):
         logger.info("Loading reference audio...")
         prompt_speech_16k = load_wav(request.reference_audio_path, 16000)
         
+        # Prepend language tag to guide CosyVoice to generate in correct language
+        language_tag = LANGUAGE_TAG_MAP.get(request.language_id, "<|en|>")
+        tagged_text = language_tag + request.text
+        
         logger.info("Starting CosyVoice2 generation...")
         logger.info(f"  Reference text: '{request.reference_text[:100]}...'")
         logger.info(f"  Generate text: '{request.text[:100]}...'")
+        logger.info(f"  Language tag: '{language_tag}'")
+        logger.info(f"  Tagged text: '{tagged_text[:100]}...'")
         
         # Use cross_lingual inference for cross-language voice cloning
         # This allows Japanese voice -> English speech
-        # For same-language cloning, could use inference_zero_shot instead
+        # Language tag ensures output is in the specified language
         audio_chunks = []
         
         for i, result in enumerate(cosyvoice_model.inference_cross_lingual(
-            request.text,
+            tagged_text,  # Use tagged text with language specification
             prompt_speech_16k,
             stream=request.stream
         )):
