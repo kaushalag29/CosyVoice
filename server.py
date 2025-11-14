@@ -200,10 +200,14 @@ async def shutdown():
     return {"status": "shutting down"}
 
 if __name__ == "__main__":
+    # Port is configurable via environment variable
+    port = int(os.environ.get("PORT", 8018))
+    logger.info(f"Starting CosyVoice server on port {port}")
+
     # Run the server
     uvicorn.run(
         app,
         host="0.0.0.0",
-        port=8018,  # Different port from F5-TTS (8017)
+        port=port,
         log_level="info"
     )
