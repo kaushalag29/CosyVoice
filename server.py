@@ -1,6 +1,6 @@
 """
-CosyVoice2 Server
-Hosts the CosyVoice2-0.5B model for cross-lingual voice cloning via HTTP API.
+CosyVoice3 Server
+Hosts the Fun-CosyVoice3-0.5B model for cross-lingual voice cloning via HTTP API.
 """
 import os
 import sys
@@ -17,7 +17,7 @@ import uvicorn
 matcha_tts_path = Path(__file__).parent / "third_party" / "Matcha-TTS"
 sys.path.insert(0, str(matcha_tts_path))
 
-from cosyvoice.cli.cosyvoice import CosyVoice2
+from cosyvoice.cli.cosyvoice import AutoModel
 from cosyvoice.utils.file_utils import load_wav
 
 # Setup logging
@@ -49,10 +49,10 @@ class GenerateAudioRequest(BaseModel):
     language_id: str = "en"  # Target language (2-letter ISO code)
 
 def initialize_model():
-    """Initialize CosyVoice2 model on startup"""
+    """Initialize CosyVoice3 model on startup"""
     global cosyvoice_model
-    
-    logger.info("Initializing CosyVoice2 model...")
+
+    logger.info("Initializing CosyVoice3 model...")
     
     # Detect device
     if torch.cuda.is_available():
@@ -65,42 +65,44 @@ def initialize_model():
     logger.info(f"Using device: {device}")
     
     try:
-        model_dir = Path(__file__).parent / "pretrained_models" / "CosyVoice2-0.5B"
-        
+        model_dir = Path(__file__).parent / "pretrained_models" / "Fun-CosyVoice3-0.5B"
+
         if not model_dir.exists():
             raise FileNotFoundError(
-                f"CosyVoice2-0.5B model not found at {model_dir}. "
+                f"Fun-CosyVoice3-0.5B model not found at {model_dir}. "
                 "Please download it first using the instructions in README.md"
             )
-        
-        # Initialize CosyVoice2 model
+
+        # Initialize CosyVoice3 model using AutoModel
+        # AutoModel automatically detects model version based on cosyvoice3.yaml
         # load_jit=False, load_trt=False, load_vllm=False for standard inference
-        cosyvoice_model = CosyVoice2(
-            str(model_dir),
-            load_jit=False,
-            load_trt=False,
-            load_vllm=False,
-            fp16=False  # Set to True if you want FP16 inference on GPU
+        cosyvoice_model = AutoModel(
+            model_dir=str(model_dir),
+            load_trt=torch.cuda.is_available(),
+            load_vllm=torch.cuda.is_available(),
+            fp16=False  # Note: FP16 has issues with CosyVoice3's DiT architecture
         )
-        
-        logger.info(f"CosyVoice2 model initialized successfully")
+
+        logger.info(f"CosyVoice3 model initialized successfully")
         logger.info(f"Model sample rate: {cosyvoice_model.sample_rate}")
         
     except Exception as e:
-        logger.error(f"Failed to initialize CosyVoice2 model: {e}", exc_info=True)
+        logger.error(f"Failed to initialize CosyVoice3 model: {e}", exc_info=True)
         raise
 
 @app.post("/generate-audio")
 async def generate_audio(request: GenerateAudioRequest):
     """
-    Generate audio using CosyVoice2 cross-lingual voice cloning.
-    
+    Generate audio using CosyVoice3 cross-lingual voice cloning.
+
     This endpoint uses inference_cross_lingual for cross-language dubbing
-    (e.g., Japanese audio -> English speech while preserving voice characteristics)
+    (e.g., Japanese audio -> English speech while preserving voice characteristics).
+    CosyVoice3 offers superior content consistency, speaker similarity, and prosody naturalness.
     """
-    # Language tag mapping for CosyVoice
-    # CosyVoice1 uses tags like <|zh|>, <|en|>, <|jp|>, <|ko|>, <|yue|>
-    # CosyVoice2 may auto-detect, but tags help ensure correct language
+    # Language tag mapping for CosyVoice3
+    # CosyVoice3 supports 9 languages and 18+ Chinese dialects
+    # Language tags: <|zh|> (Chinese), <|en|> (English), <|jp|> (Japanese),
+    # <|ko|> (Korean), <|yue|> (Cantonese), plus German, Spanish, French, Italian, Russian
     LANGUAGE_TAG_MAP = {
         "zh": "<|zh|>",
         "en": "<|en|>",
@@ -128,27 +130,28 @@ async def generate_audio(request: GenerateAudioRequest):
         if output_dir:
             os.makedirs(output_dir, exist_ok=True)
         
-        # Load reference audio at 16kHz (CosyVoice2 requirement)
+        # Load reference audio at 16kHz (CosyVoice3 requirement)
         logger.info("Loading reference audio...")
         prompt_speech_16k = load_wav(request.reference_audio_path, 16000)
         
-        # Prepend language tag to guide CosyVoice to generate in correct language
+        # CosyVoice3 requires <|endofprompt|> token format
+        # Format: "system_prompt<|endofprompt|>language_tag + text_to_speak"
+        # IMPORTANT: Only text AFTER <|endofprompt|> will be spoken
         language_tag = LANGUAGE_TAG_MAP.get(request.language_id, "<|en|>")
-        tagged_text = language_tag + request.text
-        
-        logger.info("Starting CosyVoice2 generation...")
-        logger.info(f"  Reference text: '{request.reference_text[:100]}...'")
+        tagged_text = f"You are a helpful assistant.<|endofprompt|>{language_tag}{request.text}"
+
+        logger.info("Starting CosyVoice3 generation...")
         logger.info(f"  Generate text: '{request.text[:100]}...'")
         logger.info(f"  Language tag: '{language_tag}'")
         logger.info(f"  Tagged text: '{tagged_text[:100]}...'")
-        
+
         # Use cross_lingual inference for cross-language voice cloning
-        # This allows Japanese voice -> English speech
-        # Language tag ensures output is in the specified language
+        # This allows Japanese voice -> English speech while preserving voice characteristics
+        # The <|endofprompt|> token ensures only the actual text is spoken
         audio_chunks = []
-        
+
         for i, result in enumerate(cosyvoice_model.inference_cross_lingual(
-            tagged_text,  # Use tagged text with language specification
+            tagged_text,  # Text with system prompt and language specification
             prompt_speech_16k,
             stream=request.stream
         )):
@@ -189,7 +192,7 @@ async def health_check():
     
     return {
         "status": "healthy",
-        "model": "CosyVoice2-0.5B",
+        "model": "Fun-CosyVoice3-0.5B",
         "sample_rate": cosyvoice_model.sample_rate
     }
 
