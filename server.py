@@ -99,18 +99,6 @@ async def generate_audio(request: GenerateAudioRequest):
     (e.g., Japanese audio -> English speech while preserving voice characteristics).
     CosyVoice3 offers superior content consistency, speaker similarity, and prosody naturalness.
     """
-    # Language tag mapping for CosyVoice3
-    # CosyVoice3 supports 9 languages and 18+ Chinese dialects
-    # Language tags: <|zh|> (Chinese), <|en|> (English), <|jp|> (Japanese),
-    # <|ko|> (Korean), <|yue|> (Cantonese), plus German, Spanish, French, Italian, Russian
-    LANGUAGE_TAG_MAP = {
-        "zh": "<|zh|>",
-        "en": "<|en|>",
-        "ja": "<|jp|>",  # Note: CosyVoice uses "jp" internally, not "ja"
-        "ko": "<|ko|>",
-        "yue": "<|yue|>"
-    }
-    
     try:
         logger.info("Received generate-audio request")
         logger.info(f"Text length: {len(request.text)} chars")
@@ -130,29 +118,22 @@ async def generate_audio(request: GenerateAudioRequest):
         if output_dir:
             os.makedirs(output_dir, exist_ok=True)
         
-        # Load reference audio at 16kHz (CosyVoice3 requirement)
-        logger.info("Loading reference audio...")
-        prompt_speech_16k = load_wav(request.reference_audio_path, 16000)
-        
-        # CosyVoice3 requires <|endofprompt|> token format
-        # Format: "system_prompt<|endofprompt|>language_tag + text_to_speak"
-        # IMPORTANT: Only text AFTER <|endofprompt|> will be spoken
-        language_tag = LANGUAGE_TAG_MAP.get(request.language_id, "<|en|>")
-        tagged_text = f"You are a helpful assistant.<|endofprompt|>{language_tag}{request.text}"
+        # CosyVoice3 loads reference audio internally at 24kHz
+        logger.info("Using reference audio path: %s", request.reference_audio_path)
 
         logger.info("Starting CosyVoice3 generation...")
         logger.info(f"  Generate text: '{request.text[:100]}...'")
-        logger.info(f"  Language tag: '{language_tag}'")
-        logger.info(f"  Tagged text: '{tagged_text[:100]}...'")
+        logger.info(f"  Language: {request.language_id}")
 
         # Use cross_lingual inference for cross-language voice cloning
         # This allows Japanese voice -> English speech while preserving voice characteristics
-        # The <|endofprompt|> token ensures only the actual text is spoken
+        # CosyVoice3 requires the system prompt prefix with <|endofprompt|> token
+        tagged_text = f"You are a helpful assistant.<|endofprompt|>{request.text}"
         audio_chunks = []
 
         for i, result in enumerate(cosyvoice_model.inference_cross_lingual(
-            tagged_text,  # Text with system prompt and language specification
-            prompt_speech_16k,
+            tagged_text,
+            request.reference_audio_path,
             stream=request.stream
         )):
             logger.info(f"Generated chunk {i}")
